@@ -1,0 +1,180 @@
+// VerilogA for IGZO, IGZO_cell, veriloga
+
+`include "constants.vams"
+`include "disciplines.vams"
+`define DEBUG if (1) $strobe
+
+module IGZO_cell(G,D,S);
+parameter real T = 300 from (0:inf]; //room temperature
+parameter real TA = 400 from (0:inf]; //characteristic temperature
+parameter real L = 40.0e-9 from (0:inf]; //channel length
+parameter real W = 1e-6 from (0:inf]; //channel width
+parameter real ts = 10.0e-9 from (0:inf]; //channel thickness
+parameter real n = 20 from (0:inf]; //surface potential transition
+parameter real ss = 5 from (0:inf]; //subthreshold slope
+parameter real v0 = 1e11 from (0:inf]; //attempt-to-escape frequency
+parameter real t0 = 1e-11 from (0:inf]; //lifetime of electrons
+parameter real E0 = 8.85e-12 from (0:inf]; //permittivity of free space
+parameter real Cox = 0.016 from (0:inf]; //insulator capacitance per unit area
+parameter real Nt = 1e21 from (0:inf]; //total concentration of localized states
+parameter real k = 1.38e-23 from (0:inf]; //boltzmann constant
+parameter real q = 1.6e-19 from (0:inf]; //elementary charge
+parameter real mu0 = 0.001 from (0:inf]; //percolation mobility
+parameter real Ileak0 = 2.0e-18 from (0:inf]; //leakage current
+parameter real modyCs = 300 from [-inf:inf]; //capacitance correction
+parameter real modyCd = 0.6 from [-inf:inf]; //capacitance correction
+parameter real C_gs0 = 2e-15 from (0:inf]; //gate-source overlapped capacitance
+parameter real C_gd0 = 1e-15 from (0:inf]; //gate-drain overlapped capacitance
+parameter real a0 = 2e-9 from (0:inf]; //localization length
+parameter real v = 0.875 from (0:inf]; //critical exponent of correlation length
+parameter real sig = 2 from (0:inf]; //width of DOS
+parameter real r = 0.1 from (0:inf]; //spatial coherence ratio of potential barriers
+parameter real Lc = 5.0e-9 from (0:inf]; //contact length
+parameter real A0 = 2.4e-9 from (0:inf]; //contact factor
+parameter real gamma = 1.2 from (0:inf]; //contact index
+parameter real rat = 1 from (0:inf]; //defect to electron ratio
+parameter real Vbi = 1 from (0:inf]; //built-in potential
+parameter real dibl = 1 from (0:inf]; //DIBL effect factor
+parameter real mum = 0.00001 from (0:inf]; //multi-channel percolation mobility
+parameter real nn = 0.8 from (0:inf]; //minimal number of concatenative bonds
+
+ground gnd;
+inout G, D, S;
+electrical G, D, S;
+real vg, vd, vs, ddd, sss;
+real xg, xns, xnd, x0s, x0d, Psource, Pdrain, Ueff, Vg0, Vfb;
+real Gt, GtA, LT, VT, VTA, Es, EF0, err1, err2;
+real L0, nc, sigma, UVRH, UMCP, VP, mup, PhiB, theta, UFE, mu;
+real lr, Von, delta;
+real Ids, I_ds, Ileak;
+real vdse, C_gs, C_gd, C_gst, C_gdt;
+real QG, QD, QS, A, B, corr;
+real inpsource, inpdrain, err1in, err1in2, err2in, err2in2;
+real GS1up1, GS1up2, GS1up3, GS1down, GS2up1, GS2up2, GS2down, GD1up1, GD1up2, GD1up3, GD1down, GD2up1, GD2up2, GD2down;
+
+analog begin
+vg = V(G,gnd);
+ddd = V(D,gnd);
+sss = V(S,gnd);
+
+if (ddd >= sss) begin
+vd = ddd;
+vs = sss;
+end else begin
+vd = sss;
+vs = ddd;
+end
+
+Vfb = -0.24 / 160 * T - 0.01;
+Es = 10 * E0;
+EF0 = - 10 * k * T; //Fermi level far from the interface  
+VT = k * T / q;
+VTA = k * TA / q;
+LT = 3.14 * (T / TA) / sin(3.14 * T / TA); 
+lr = sqrt(Es * ts / Cox);
+Von = TA / (TA - T) * VT * ln(rat * LT / (v0 * t0)) - EF0 / q; 
+//delta = dibl * (exp(-L / lr) * (3 * (Vbi - Von) + (vd -vs)) + exp(-L / (2 * lr)) * 2 * sqrt((vd - vs + Vbi - Von) * (Vbi - Von)));
+delta = dibl * exp(-L / lr) * (3 * (Vbi - Von) + (vd -vs));
+Vg0 = (1 / ss) * ln(1 + exp(ss * (vg - Vfb + delta)));
+
+// (Type 1) Hopping Transport for below threshold region 
+// Exponential Relation to (1/T)
+L0 = 1e9 * L;
+nc = 0.707 * pow(L0, -1 / v) + 0.219; //Finite-size effect
+sigma = sig * k * T;
+UVRH = 0.36 * pow(k * T / sigma, v) * v0 * q / (sigma * a0) * pow(pow(a0 * sigma / (k * T), 3) / (8 * nc), sigma / (k * T)) * pow(pow(Cox * Vg0, 2) / (2 * sigma * Es), sigma / (k * T) - 1);
+
+// (Type 2) Hopping Transport for below threshold region 
+UMCP = mum / (Cox * Vg0) * exp(-sqrt(nn * (ln(2 * TA * Nt * q / (nn * nn * T * Cox * Vg0)))));
+
+// Percolation Transport for above threshold regions 
+// Power law relation 
+VP = 1.1 + 0.707 * pow(L0, -1 / v);
+mup = mu0 * pow(pow(vg - VP, 2) + 0.5, r / 2);
+
+// Effective Mobility
+if(L0 > 20) begin
+UFE = UVRH;
+end else begin
+UFE = UMCP;
+end
+Ueff = UFE * mup / (UFE + mup);
+
+// Contact Resistance Effects / Directly degrade mobility
+// gamma=0 for ohomic resistancce gamma>0 for nonlinear case 
+PhiB = 0.5 * q / Vg0;
+theta = Ueff * Cox * A0 * exp(PhiB / VT) * pow(Vg0, gamma) / (L * Lc * T);
+mu = Ueff / (1 + theta);
+
+// Surface potential Calculation 
+// x0s/d is an indemidate value of surface potential
+// Psource and Pdrain is corrected by err1/2
+// Noted that a fixed constant (~1.3) is a smoothing parameter 
+Gt = sqrt(q * Es * Nt * v0 * t0 * VT * exp(EF0 / (k * T))) / Cox;
+GtA = sqrt(q * Es * Nt * VTA * LT * exp(EF0 / (k * TA))) / Cox;
+xns = vs / (2 * VTA);
+xnd = vd / (2 * VTA);
+xg = Vg0 / (2 * VTA);
+x0s = ln(xg / GtA) + xns;
+x0d = ln(xg / GtA) + xnd;
+err1 = ln(exp(2 * VTA * x0s) + 1.3);
+err2 = ln(exp(2 * VTA * x0d) + 1.3);
+Psource = pow(pow(err1, n) * pow(Vg0, n) / (pow(err1, n) + pow(Vg0, n)), 1 / n); 
+//source potential at the semiconductor-insulator interface
+Pdrain = pow(pow(err2, n) * pow(Vg0, n) / (pow(err2, n) + pow(Vg0, n)), 1 / n); 
+//drain potential at the semiconductor-insulator interface
+
+// Leakage Current Representation
+Ileak = (W / L) * Ileak0 * exp(Vg0 / (100 * VT)) * (1 - exp(-abs(vd - vs) / VT));
+
+// Total Current Model 
+// the term of ddd/sss is a symmetry parameter 
+Ids = mu * (W / L) * Cox * (2 * VT * (Pdrain - Psource) - 0.5 * (pow(Vg0 - Pdrain, 2)-pow(Vg0 - Psource, 2))) + Ileak;
+I_ds = Ids * (ddd - sss) / (vd - vs);
+
+// Simple Capacitance Model Type 1
+vdse = 0.5 * (vd - vs + Vg0 - pow(0.01 + pow(vd - vs - Vg0, 2), 0.5));
+C_gs = modyCs * Cox * W * L * (1 - pow((Vg0 - vdse) / (2 * Vg0 - vdse), 2));
+C_gd = modyCd * Cox * W * L * (1 - pow(Vg0 / (2 * Vg0 - vdse), 2));
+C_gst = C_gs + C_gs0;
+C_gdt = C_gd + C_gd0;
+
+// Traditional Capacitance Model Type 2
+A = Vg0 - Psource;
+B = Vg0 - Pdrain;
+QG = W * L * Cox * (2/3) * ((A * A + B * B + A * B) / (A + B));
+QD = W * L * Cox * (2/15) * ((2 * A * A * A + 4 * A * A * B + 6 * A * B * B + 3 * B * B * B) / ((A + B) * (A + B)));
+QS = -QD - QG;
+
+inpsource = pow(err1, n) * pow(Vg0, n) / (pow(err1, n) + pow(Vg0, n));
+inpdrain = pow(err2, n) * pow(Vg0, n) / (pow(err2, n) + pow(Vg0, n));
+err1in = exp(2 * VTA * x0s) + 1.3;
+err1in2 = exp(2 * VTA * x0s);
+err2in = exp(2 * VTA * x0d) + 1.3;
+err2in2 = exp(2 * VTA * x0d);
+GS1up1 = 2 * (sqrt(2 * q * Es) / Cox) * L * W * pow(inpsource, (1/n)-1);
+GS1up2 = -((err1in2 * n * pow(Vg0,n) * pow(err1,2 * n - 1)) / (err1in * pow(pow(Vg0,n) + pow(err1,n),2))) + (err1in2 * n * pow(Vg0,n) * pow(err1,n-1)) / (err1in * (pow(Vg0,n) + pow(err1,n)));
+GS1up3 = pow((Vg0 - Pdrain),2) + (Vg0 - Pdrain) * (Vg0 - Psource) + pow((Vg0 - Psource),2);
+GS1down = 3 * n * pow((2 * Vg0 - Pdrain - Psource),2);
+GS2up1 = (-1/n) * (Vg0 - Pdrain) * pow(inpsource, (1/n)-1) * GS1up2;
+GS2up2 = (1/n) * 2 * (Vg0 - Psource) * pow(inpsource,(1/n)-1) * GS1up2;
+GS2down = 3 * (2 * Vg0 - Pdrain - Psource);
+//C_gs = -modyCs * ((GS1up1 * GS1up2 * GS1up3) / GS1down + (2 * (sqrt(2 * q * Es) / Cox) * L * W * (GS2up1 - GS2up2)) / GS2down);
+GD1up1 = 2 * (sqrt(2 * q * Es) / Cox) * L * W * pow(inpdrain, (1/n)-1);
+GD1up2 = -((err2in2 * n * pow(Vg0,n) * pow(err2,2 * n - 1)) / (err2in * pow(pow(Vg0,n) + pow(err2,n),2))) + (err2in2 * n * pow(Vg0,n) * pow(err2,n-1)) / (err2in * (pow(Vg0,n) + pow(err2,n)));
+GD1up3 = pow((Vg0 - Pdrain),2) + (Vg0 - Pdrain) * (Vg0 - Psource) + pow((Vg0 - Psource),2);
+GD1down = 3 * n * pow((2 * Vg0 - Pdrain - Psource),2);
+GD2up1 = (-1/n) * (Vg0 - Psource) * pow(inpdrain, (1/n)-1) * GD1up2;
+GD2up2 = (1/n) * 2 * (Vg0 - Pdrain) * pow(inpdrain,(1/n)-1) * GD1up2;
+GD2down = 3 * (2 * Vg0 - Pdrain - Psource);
+//C_gd = -modyCd * ((GD1up1 * GD1up2 * GD1up3) / GD1down + (2 * (sqrt(2* q * Es) / Cox) * L * W * (GD2up1 - GD2up2)) / GD2down);
+//C_gst = (C_gs + corr * Vg0) / (1 + corr) + C_gs0;
+//C_gdt = (C_gd + corr * Vg0) / (1 + corr) + C_gd0;
+
+I(D,S) <+ I_ds;
+I(G,S) <+ ddt(C_gst * V(G,S));
+I(G,D) <+ ddt(C_gdt * V(G,D));
+
+end
+
+endmodule
